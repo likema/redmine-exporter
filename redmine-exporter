@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# Author: Like Ma <likemartinma@gmail.com>
+# vim: set ts=4 sw=4 sts=4 et:
+
+import json
+import os.path
+import logging
+from argparse import ArgumentParser
+from os import environb
+
+from redminelib import Redmine
+from bs4 import BeautifulSoup
+
+
+def default_conf():
+    return os.path.join(get_env('HOME'), '.redmine-exporter.conf')
+
+
+def get_env(name):
+    v = environb.get(name.encode())
+    return v.decode('utf-8') if v else None
+
+
+def wiki_fname(wiki, ext):
+    return '%s.%s' % (i.replace(' ', '_'), ext)
+
+
+def parse_args():
+    parser = ArgumentParser('redmine-exporter')
+    parser.add_argument('-u', '--redmine-url',
+                        default=get_env('REDMINE_URL'),
+                        help='Remine access key')
+
+    parser.add_argument('-k', '--redmine-key',
+                        default=get_env('REDMINE_KEY'),
+                        help='Remine access key')
+
+    parser.add_argument('-p', '--project',
+                        default=get_env('REDMINE_PROJECT'),
+                        help='Remine project id or name')
+
+    parser.add_argument('-t', '--type', choices=('textile', 'html', 'pdf'),
+                        default='textile',
+                        help='Export format type')
+
+    parser.add_argument('-s', '--style', help='Replace style tag')
+    parser.add_argument('--toc', action='store_true',
+                        help='Enable table of content')
+
+    parser.add_argument('-f', '--file', default=default_conf(),
+                        help='Specify configure file')
+
+    parser.add_argument('-o', '--output', default='.',
+                        help='Output directory')
+
+    parser.add_argument('wiki', nargs='+', help='wiki name')
+
+    args = parser.parse_args()
+    if args.file and os.path.isfile(args.file):
+        try:
+            conf = json.load(open(args.file))
+            if not args.redmine_url:
+                args.redmine_url = conf.get('redmine_url')
+
+            if not args.redmine_key:
+                args.redmine_key = conf.get('redmine_key')
+
+            if not args.project:
+                args.project = conf.get('project')
+        except Exception as e:
+            logging.warning('Failed to load %s, %s', args.file, e)
+
+    d = vars(args)
+    for i in ('redmine_url', 'redmine_key', 'project'):
+        if not d[i]:
+            raise ValueError('Invalid value of --%s' % (i.replace('_', '-')))
+
+    return args
+
+
+def export(redmine, wiki, args):
+    page = redmine.wiki_page.get(wiki, project_id=args.project)
+    if args.type == 'textile':
+        text = page.text
+        if not args.toc:
+            text = text.replace('{{>toc}}', '')
+
+        fname = os.path.join(args.output, wiki_fname(wiki, 'wiki'))
+        open(fname, 'w').write(text)
+    elif args.type == 'pdf':
+        page.export('pdf', args.output)
+    elif args.type == 'html':
+        page.export('html', args.output)
+        html = os.path.join(args.output, wiki_fname(wiki, 'html'))
+        soup = BeautifulSoup(open(html), features="html.parser")
+
+        if args.style:
+            tag = soup.html.head.style
+            tag.clear()
+            tag.append(open(args.style).read())
+
+        if not args.toc:
+            ul = soup.select_one('ul.toc')
+            if ul:
+                ul.decompose()
+
+        open(html, 'w').write(
+            soup.prettify(formatter=lambda x: x.replace('¶', '')))
+
+
+args = parse_args()
+redmine = Redmine(args.redmine_url, key=args.redmine_key)
+for i in args.wiki:
+    export(redmine, i, args)
