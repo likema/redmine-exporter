@@ -5,12 +5,30 @@
 
 import json
 import os.path
-import logging
+import re
 from argparse import ArgumentParser
-from os import environb
+from os import environb, system, linesep
+from io import StringIO, BytesIO
+from sys import stderr
 
 from redminelib import Redmine
 from bs4 import BeautifulSoup
+from lxml import etree as ET
+
+
+DOCBOOK_TPL = b'''
+<article xmlns="http://docbook.org/ns/docbook"
+         xmlns:xl="http://www.w3.org/1999/xlink"
+         xmlns:xlink="http://www.w3.org/1999/xlink"
+         xmlns:xi="http://www.w3.org/2001/XInclude"
+         xmlns:xinclude="http://www.w3.org/2001/XInclude"
+         version="5.0"
+         xml:lang="zh">
+  <artheader>
+    <title></title>
+  </artheader>
+</article>
+'''
 
 
 def default_conf():
@@ -28,6 +46,11 @@ def wiki_fname(wiki, ext):
 
 def parse_args():
     parser = ArgumentParser('redmine-exporter')
+    parser.add_argument('-t', '--type',
+                        choices=('textile', 'html', 'pdf', 'docbook'),
+                        default='textile',
+                        help='Export format type')
+
     parser.add_argument('-u', '--redmine-url',
                         default=get_env('REDMINE_URL'),
                         help='Remine access key')
@@ -40,19 +63,28 @@ def parse_args():
                         default=get_env('REDMINE_PROJECT'),
                         help='Remine project id or name')
 
-    parser.add_argument('-t', '--type', choices=('textile', 'html', 'pdf'),
-                        default='textile',
-                        help='Export format type')
+    parser.add_argument('--css',
+                        default=get_env('REDMINE_CSS'),
+                        help='Replace html style tag by css file.')
 
-    parser.add_argument('-s', '--style', help='Replace style tag')
     parser.add_argument('--toc', action='store_true',
-                        help='Enable table of content')
+                        help='Enable html or wiki table of content')
 
     parser.add_argument('-f', '--file', default=default_conf(),
-                        help='Specify configure file')
+                        help=('Specify configure, '
+                              'default ~/.redmine_exporter.conf'))
 
     parser.add_argument('-o', '--output', default='.',
                         help='Output directory')
+
+    parser.add_argument('--title', help='Specify title')
+
+    parser.add_argument('--docbook-tpl',
+                        default=get_env('REDMINE_DOCBOOK_TPL'),
+                        help='Specify docbook template')
+
+    parser.add_argument('--pandoc', default=get_env('REDMINE_PANDOC_OPTS'),
+                        help='pandoc cli options for generating docbook')
 
     parser.add_argument('wiki', nargs='+', help='wiki name')
 
@@ -68,8 +100,14 @@ def parse_args():
 
             if not args.project:
                 args.project = conf.get('project')
+
+            if not args.css:
+                args.css = conf.get('css')
+
+            if not args.docbook_tpl:
+                args.docbook_tpl = conf.get('docbook_tpl')
         except Exception as e:
-            logging.warning('Failed to load %s, %s', args.file, e)
+            stderr.write('Failed to load %s, %s', args.file, e)
 
     d = vars(args)
     for i in ('redmine_url', 'redmine_key', 'project'):
@@ -79,34 +117,117 @@ def parse_args():
     return args
 
 
+def export_textile(page, wiki, args):
+    # convert to native line separator.
+    text = page.text.replace('\r\n', linesep)
+
+    fname = os.path.join(args.output, wiki_fname(wiki, 'wiki'))
+    with open(fname, 'w') as fp:
+        title, toc = args.title, args.toc
+        if title or not toc:
+            for i in StringIO(text):
+                s = i.strip()
+                if not toc and s == '{{>toc}}':
+                    i = '\n'
+                    toc = True
+                elif title and s.startswith('h1. '):
+                    i = 'h1 %s\n' % title
+                    title = None
+
+                fp.write(i)
+        else:
+            fp.write(text)
+
+    return fname
+
+
+def export_html(page, wiki, args):
+    page.export('html', savepath=args.output)
+    html = os.path.join(args.output, wiki_fname(wiki, 'html'))
+    soup = BeautifulSoup(open(html), features="html.parser")
+
+    if args.css:
+        tag = soup.html.head.css
+        tag.clear()
+        tag.append(open(args.css).read())
+
+    if args.title:
+        tag = soup.html.head.title
+        tag.clear()
+        tag.append(args.title)
+
+        tag = soup.html.body.h1
+        tag.clear()
+        tag.append(args.title)
+
+    if not args.toc:
+        ul = soup.select_one('ul.toc')
+        if ul:
+            ul.decompose()
+
+    open(html, 'w').write(
+        soup.prettify(formatter=lambda x: x.replace('¶', '')))
+
+
+def xml_parse_ns(fname):
+    return {elem[0]: elem[1] for evt, elem in ET.iterparse(fname, ['start-ns'])
+            if evt == 'start-ns'}
+
+
+def strip_tags(fname, tag):
+    tag_checker = re.compile(r'<%s[^>]*>' % tag)
+    text = open(fname).read()
+    text = re.sub(tag_checker, '', text.replace('</%s>' % tag, ''))
+    open(fname, "w").write(text)
+
+
+def docbook_template(args):
+    return args.docbook_tpl if args.docbook_tpl else BytesIO(DOCBOOK_TPL)
+
+
+def export_docbook(page, wiki, args):
+    textile = export_textile(page, wiki, args)
+
+    # literallayout can not be rendered properly in pdf.
+    strip_tags(textile, 'code')
+
+    docbook = os.path.join(args.output, wiki_fname(wiki, 'xml'))
+    system('pandoc %s -f textile -t docbook -o "%s" "%s"' %
+           (args.pandoc if args.pandoc else '', docbook, textile))
+
+    ns = xml_parse_ns(docbook_template(args))
+
+    parser = ET.XMLParser(recover=True)
+    article = ET.parse(docbook_template(args), parser=parser)
+    article_root = article.getroot()
+
+    ns['docbook'] = ns['']
+    title = article_root.find(
+        'docbook:artheader/docbook:title', ns)
+
+    tree = ET.parse(docbook, parser=parser)
+    root = tree.getroot()
+
+    title.text = args.title if args.title else root.find('./title').text
+    for i in root.findall('./section'):
+        article_root.append(i)
+
+    article.write(docbook, encoding='UTF-8', xml_declaration=True)
+
+    # literallayout can not be rendered properly in pdf.
+    strip_tags(docbook, 'literallayout')
+
+
 def export(redmine, wiki, args):
     page = redmine.wiki_page.get(wiki, project_id=args.project)
     if args.type == 'textile':
-        text = page.text
-        if not args.toc:
-            text = text.replace('{{>toc}}', '')
-
-        fname = os.path.join(args.output, wiki_fname(wiki, 'wiki'))
-        open(fname, 'w').write(text)
+        export_textile(page, wiki, args)
     elif args.type == 'pdf':
-        page.export('pdf', args.output)
+        page.export('pdf', savepath=args.output)
     elif args.type == 'html':
-        page.export('html', args.output)
-        html = os.path.join(args.output, wiki_fname(wiki, 'html'))
-        soup = BeautifulSoup(open(html), features="html.parser")
-
-        if args.style:
-            tag = soup.html.head.style
-            tag.clear()
-            tag.append(open(args.style).read())
-
-        if not args.toc:
-            ul = soup.select_one('ul.toc')
-            if ul:
-                ul.decompose()
-
-        open(html, 'w').write(
-            soup.prettify(formatter=lambda x: x.replace('¶', '')))
+        export_html(page, wiki, args)
+    elif args.type == 'docbook':
+        export_docbook(page, wiki, args)
 
 
 args = parse_args()
