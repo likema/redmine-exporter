@@ -4,7 +4,7 @@
 
 * Python 3
     ```bash
-    pip install redminelib bs4 lxml
+    pip install python-redmine beautifulsoup4 lxml
     ```
 * Optionally, for exporting as [DocBook](https://docbook.org/), install [Pando](https://pandoc.org/installing).
 
