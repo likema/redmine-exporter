@@ -24,9 +24,9 @@ DOCBOOK_TPL = b'''
          xmlns:xinclude="http://www.w3.org/2001/XInclude"
          version="5.0"
          xml:lang="zh">
-  <artheader>
+  <info>
     <title></title>
-  </artheader>
+  </info>
 </article>
 '''
 
@@ -203,7 +203,7 @@ def export_docbook(page, wiki, args):
 
     ns['docbook'] = ns['']
     title = article_root.find(
-        'docbook:artheader/docbook:title', ns)
+        'docbook:info/docbook:title', ns)
 
     tree = ET.parse(docbook, parser=parser)
     root = tree.getroot()
