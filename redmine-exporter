@@ -10,7 +10,9 @@ from argparse import ArgumentParser
 from os import environb, system, linesep
 from io import StringIO, BytesIO
 from sys import stderr
+from urllib.parse import urlparse, urlunparse
 
+import requests
 from redminelib import Redmine
 from bs4 import BeautifulSoup
 from lxml import etree as ET
@@ -165,10 +167,27 @@ def export_html(page, wiki, args):
         if ul:
             ul.decompose()
 
+    for i in soup.select('img'):
+        i['src'] = export_img(i['src'], args)
+
     open(html, 'w').write(
         soup.prettify(formatter=lambda x: x.replace('¶', '')))
 
     strip_tags(html, 'code')
+
+
+def export_img(src, args):
+    u = urlparse(args.redmine_url)._replace(path=src)
+    res = requests.get(urlunparse(u),
+                       headers={'X-Redmine-API-Key': args.redmine_key})
+
+    res.raise_for_status()
+
+    fname = os.path.basename(u.path)
+    with open(fname, 'wb') as fp:
+        fp.write(res.content)
+
+    return fname
 
 
 def xml_parse_ns(fname):
