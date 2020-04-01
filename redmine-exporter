@@ -147,7 +147,7 @@ def export_html(page, wiki, args):
     soup = BeautifulSoup(open(html), features="html.parser")
 
     if args.css:
-        tag = soup.html.head.css
+        tag = soup.html.head.style
         tag.clear()
         tag.append(open(args.css).read())
 
@@ -167,6 +167,8 @@ def export_html(page, wiki, args):
 
     open(html, 'w').write(
         soup.prettify(formatter=lambda x: x.replace('¶', '')))
+
+    strip_tags(html, 'code')
 
 
 def xml_parse_ns(fname):
