@@ -32,6 +32,7 @@ optional arguments:
   -p PROJECT, --project PROJECT
                         Remine project id or name
   --css CSS             Replace html style tag by css file.
+  --embed-images        Base64 encode images into html.
   --toc                 Enable html or wiki table of content
   -f FILE, --file FILE  Specify configure, default ~/.redmine_exporter.conf
   -o OUTPUT, --output OUTPUT

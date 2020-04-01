@@ -6,11 +6,13 @@
 import json
 import os.path
 import re
+import mimetypes
 from argparse import ArgumentParser
 from os import environb, system, linesep
 from io import StringIO, BytesIO
 from sys import stderr
 from urllib.parse import urlparse, urlunparse
+from base64 import b64encode
 
 import requests
 from redminelib import Redmine
@@ -69,6 +71,9 @@ def parse_args():
                         default=get_env('REDMINE_CSS'),
                         help='Replace html style tag by css file.')
 
+    parser.add_argument('--embed-images', action='store_true',
+                        help='Base64 encode images into html.')
+
     parser.add_argument('--toc', action='store_true',
                         help='Enable html or wiki table of content')
 
@@ -109,7 +114,7 @@ def parse_args():
             if not args.docbook_tpl:
                 args.docbook_tpl = conf.get('docbook_tpl')
         except Exception as e:
-            stderr.write('Failed to load %s, %s', args.file, e)
+            print('Failed to load %s, %s' % (args.file, e), file=stderr)
 
     d = vars(args)
     for i in ('redmine_url', 'redmine_key', 'project'):
@@ -168,7 +173,7 @@ def export_html(page, wiki, args):
             ul.decompose()
 
     for i in soup.select('img'):
-        i['src'] = export_img(i['src'], args)
+        i['src'] = export_image(i['src'], args)
 
     open(html, 'w').write(
         soup.prettify(formatter=lambda x: x.replace('¶', '')))
@@ -176,12 +181,20 @@ def export_html(page, wiki, args):
     strip_tags(html, 'code')
 
 
-def export_img(src, args):
+def export_image(src, args):
     u = urlparse(args.redmine_url)._replace(path=src)
     res = requests.get(urlunparse(u),
                        headers={'X-Redmine-API-Key': args.redmine_key})
 
     res.raise_for_status()
+
+    if args.embed_images:
+        mime, _ = mimetypes.guess_type(u.path)
+        if mime:
+            data = b64encode(res.content).decode('ascii')
+            return 'data:%s;base64,%s' % (mime, data)
+
+        print('WARN: unable to guess mime type of %s' % u.path, file=stderr)
 
     fname = os.path.basename(u.path)
     with open(fname, 'wb') as fp:
