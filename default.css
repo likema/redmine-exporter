@@ -1,8 +1,9 @@
 body {
-  //font-family: "微软雅黑","Helvetica Neue",Helvetica,Arial,sans-serif;
+  font-family: "DejaVu Sans","Noto Sans CJK SC","Helvetica Neue",Helvetica,Arial,sans-serif;
   font-size: 14px;
   line-height: 1.42857143;
   color: #333;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' version='1.1' width='650px' height='500px'><text transform='translate(50, 300) rotate(-30)' fill='rgba(122,122,122,0.07)' font-size='48' font-family='DejaVu Sans,Helvetica Neue,Helvetica,Arial,sans-serif'>CONFIDENTIAL</text></svg>");
 }
 
 pre {
@@ -10,10 +11,12 @@ pre {
   padding: 9.5px;
   margin: 0 0 10px;
   line-height: 1.42857143;
-  font-size: 13px;
+  font-family: "DejaVu Sans Mono",monospace;
+  font-size: 10px;
   color: #333;
   word-break: break-all;
   word-wrap: break-word;
+  white-space: pre-wrap;
   background-color: #f5f5f5;
   border: 1px solid #ccc;
   border-radius: 4px;
@@ -34,6 +37,14 @@ table>thead>tr>th {
   border: 1px solid #ddd;
 }
 
+td {
+  padding: 10px;
+}
+
 h1 {
   text-align: center;
+}
+
+img {
+  width: 100%;
 }

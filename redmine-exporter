@@ -8,7 +8,7 @@ import os.path
 import re
 import mimetypes
 from argparse import ArgumentParser
-from os import environb, system, linesep
+from os import environb, system, linesep, unlink
 from io import StringIO, BytesIO
 from sys import stderr
 from urllib.parse import urlparse, urlunparse
@@ -33,6 +33,9 @@ DOCBOOK_TPL = b'''
   </info>
 </article>
 '''
+
+SVG_FNAME_RE = re.compile(r"'([^']+\.svg)'")
+VIEWER_WARNING_RE = re.compile(r'Viewer does not support full SVG .*')
 
 
 def default_conf():
@@ -74,6 +77,13 @@ def parse_args():
     parser.add_argument('--embed-images', action='store_true',
                         help='Base64 encode images into html.')
 
+    parser.add_argument('--convert-svg', choices=('png', 'jpg', 'gif'),
+                        help=('Convert SVG to other image format by '
+                              'ImageMagick convert.'))
+
+    parser.add_argument('--convert-svg-opts',
+                        help='ImageMagick convert command line options')
+
     parser.add_argument('--toc', action='store_true',
                         help='Enable html or wiki table of content')
 
@@ -113,6 +123,9 @@ def parse_args():
 
             if not args.docbook_tpl:
                 args.docbook_tpl = conf.get('docbook_tpl')
+
+            if not args.convert_svg_opts:
+                args.convert_svg_opts = conf.get('convert_svg_opts')
         except Exception as e:
             print('Failed to load %s, %s' % (args.file, e), file=stderr)
 
@@ -151,7 +164,10 @@ def export_textile(page, wiki, args):
 def export_html(page, wiki, args):
     page.export('html', savepath=args.output)
     html = os.path.join(args.output, wiki_fname(wiki, 'html'))
-    soup = BeautifulSoup(open(html), features="html.parser")
+
+    # Use html5lib instead of html.parser, because the latter will lowercase
+    # SVG tag foreignObject
+    soup = BeautifulSoup(open(html), features='html5lib')
 
     if args.css:
         tag = soup.html.head.style
@@ -175,10 +191,28 @@ def export_html(page, wiki, args):
     for i in soup.select('img'):
         i['src'] = export_image(i['src'], args)
 
+    for i in soup.select('span.drawioDiagram'):
+        v = i['ondblclick']
+        if "find('svg')" in v:
+            m = SVG_FNAME_RE.search(v)
+            i.parent.append(
+                soup.new_tag('img', src=export_svg(
+                    m.group(1), i.select_one('svg'), args)))
+            i.decompose()
+
     open(html, 'w').write(
         soup.prettify(formatter=lambda x: x.replace('¶', '')))
 
     strip_tags(html, 'code')
+
+
+def base64_image(path, content):
+    mime, _ = mimetypes.guess_type(path)
+    if mime:
+        data = b64encode(content).decode('ascii')
+        return 'data:%s;base64,%s' % (mime, data)
+
+    print('WARN: unable to guess mime type of %s' % path, file=stderr)
 
 
 def export_image(src, args):
@@ -187,18 +221,43 @@ def export_image(src, args):
                        headers={'X-Redmine-API-Key': args.redmine_key})
 
     res.raise_for_status()
-
     if args.embed_images:
-        mime, _ = mimetypes.guess_type(u.path)
-        if mime:
-            data = b64encode(res.content).decode('ascii')
-            return 'data:%s;base64,%s' % (mime, data)
-
-        print('WARN: unable to guess mime type of %s' % u.path, file=stderr)
+        return base64_image(u.path, res.content)
 
     fname = os.path.basename(u.path)
     with open(fname, 'wb') as fp:
         fp.write(res.content)
+
+    return fname
+
+
+def export_svg(fname, svg, args):
+    # Remove warning text tag by draw.io
+    tag = svg.find('text', text='Viewer does not support full SVG 1.1')
+    if tag:
+        tag.parent.decompose()
+
+    content = str(svg).encode('UTF-8')
+    if args.convert_svg:
+        out = '.'.join((os.path.splitext(fname)[0], args.convert_svg))
+        with open(fname, 'wb') as fp:
+            fp.write(content)
+
+        opts = args.convert_svg_opts if args.convert_svg_opts else ''
+        system('convert %s %s %s' % (opts, fname, out))
+        unlink(fname)
+        if not args.embed_images:
+            return out
+
+        content = open(out, 'rb').read()
+        unlink(out)
+        fname = out
+
+    if args.embed_images:
+        return base64_image(fname, content)
+
+    with open(fname, 'wb') as fp:
+        fp.write(content)
 
     return fname
 
