@@ -103,6 +103,11 @@ def parse_args():
     parser.add_argument('--pandoc', default=get_env('REDMINE_PANDOC_OPTS'),
                         help='pandoc cli options for generating docbook')
 
+    parser.add_argument('--weasyprint', action='store', const=True,
+                        default=get_env('REDMINE_WEASYPRINT_OPTS'),
+                        nargs='?',
+                        help='weasyprint cli options for generating pdf')
+
     parser.add_argument('wiki', nargs='+', help='wiki name')
 
     args = parser.parse_args()
@@ -204,6 +209,7 @@ def export_html(page, wiki, args):
         soup.prettify(formatter=lambda x: x.replace('¶', '')))
 
     strip_tags(html, 'code')
+    return html
 
 
 def base64_image(path, content):
@@ -316,7 +322,16 @@ def export(redmine, wiki, args):
     if args.type == 'textile':
         export_textile(page, wiki, args)
     elif args.type == 'pdf':
-        page.export('pdf', savepath=args.output)
+        if args.weasyprint:
+            html = export_html(page, wiki, args)
+            pdf, _ = os.path.splitext(html)
+            pdf += '.pdf'
+            opts = (args.weasyprint
+                    if isinstance(args.weasyprint, str) else '')
+
+            system('weasyprint %s "%s" "%s"' % (opts, html, pdf))
+        else:
+            page.export('pdf', savepath=args.output)
     elif args.type == 'html':
         export_html(page, wiki, args)
     elif args.type == 'docbook':
